@@ -8,6 +8,6 @@ edition = "2018"
 
 [dependencies]
 clap = "3.0.0-beta.2"
-# nix = { git = "https://github.com/pmalmgren/nix", branch = "master" }
-nix = { path = "../nix" }
+nix = { git = "https://github.com/pmalmgren/nix", branch = "cmsg-moar-types" }
+# nix = { path = "../nix" }
 libc = "0.2"
