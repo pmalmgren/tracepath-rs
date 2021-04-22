@@ -125,7 +125,7 @@ dependencies = [
 [[package]]
 name = "nix"
 version = "0.20.0"
-source = "git+https://github.com/pmalmgren/nix?branch=cmsg-moar-types#c96583747f0aff37c47466617ee813123e88c94e"
+source = "git+https://github.com/pmalmgren/nix?branch=tracepath-enabled#727599596d66c7f95826265bf2f0e87f36d97377"
 dependencies = [
  "bitflags",
  "cc",

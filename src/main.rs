@@ -1,9 +1,10 @@
 use std::net::UdpSocket;
-use std::error::Error;
 use clap::{Arg, App};
 use nix::cmsg_space;
 use nix::sys::uio::IoVec;
 use nix::sys::socket::{recvmsg, MsgFlags, ControlMessageOwned};
+use nix::sys::socket::setsockopt;
+use nix::sys::socket::sockopt;
 use nix::sys::select::{FdSet, select};
 use nix::sys::time::TimeVal;
 use libc;
@@ -20,40 +21,16 @@ fn udp_socket_v6() -> UdpSocket {
         .expect("Failed to bind socket")
 }
 
-unsafe fn set_sockopts(sock: RawFd) -> Result<(), Box<dyn Error>> {
-    let mut opt = [1; 1];
-    opt[0] = 1;
-    let err = libc::setsockopt(sock, libc::SOL_IP, libc::IP_RECVERR, opt.as_ptr() as *mut libc::c_void, 4);
-
-    if err == -1 {
-        println!("IP_RECVERR error");
-        return Err(Box::new(std::io::Error::last_os_error()));
-    }
-
-    let err = libc::setsockopt(sock, libc::SOL_IP, libc::IP_RECVTTL, opt.as_ptr() as *mut libc::c_void, 4);
-
-    if err == -1 {
-        println!("IP_RECVTLL error");
-        return Err(Box::new(std::io::Error::last_os_error()));
-    }
-
-    opt[0] = 2;
-    let err = libc::setsockopt(sock, libc::SOL_IP, libc::IP_MTU_DISCOVER, opt.as_ptr() as *mut libc::c_void, 4);
-
-    if err == -1 {
-        println!("IP_RETOPS error");
-        return Err(Box::new(std::io::Error::last_os_error()));
-    }
-
-    Ok(())
+fn set_sockopts(sock: RawFd) {
+    setsockopt(sock, sockopt::IpRecvErr, &true).expect("sockopt failed");
+    setsockopt(sock, sockopt::IpRecvTtl, &true).expect("sockopt failed");
+    setsockopt(sock, sockopt::IpMtuDiscover, &true).expect("sockopt failed");
 }
 
 fn prepare_socket(sock: &UdpSocket, host: &String, ttl: u32) {
     let raw_fd: RawFd = sock.as_raw_fd();
     sock.connect(&host).expect("Error connecting");
-    unsafe {
-        set_sockopts(raw_fd).unwrap();
-    }
+    set_sockopts(raw_fd);
     sock.set_ttl(ttl+1)
         .expect(format!("Failed to set ttl={} on socket", ttl).as_str());
 }
@@ -119,19 +96,33 @@ fn recv_hop_cmsg(sock: &UdpSocket) -> Result<Box<HopResult>, Box<nix::Error>> {
     return Ok(hop_result);
 }
 
+fn peer_ip(sock: &UdpSocket) -> String {
+    let peer = sock.peer_addr().unwrap().to_string();
+    let parts: Vec<&str> = peer.split(":").collect();
+    assert_eq!(parts.len(), 2);
+
+    parts[0].to_string()
+}
+
 fn traceroute(hostname: String, hops: u32) {
     let mut trace_complete = false;
+    let mut ip_addr: Option<String> = None;
     for ttl in 0..hops {
         let port = 33435 + ttl;
         let mut success = false;
         for _retry in 0..3 {
             let sock = udp_socket();
-            let host = format!("{}:{}", hostname, port);
+            let host = match ip_addr {
+                None => format!("{}:{}", hostname, port),
+                Some(ref ip) => format!("{}:{}", ip, port),
+            };
             prepare_socket(&sock, &host, ttl);
+
+            if let None = ip_addr {
+                ip_addr = Some(peer_ip(&sock));
+            }
+
             send_datagram(&sock);
-            let peer = sock.peer_addr().unwrap().to_string();
-            let parts: Vec<&str> = peer.split(":").collect();
-            assert_eq!(parts.len(), 2);
 
             match recv_hop_cmsg(&sock) {
                 Err(_err) => {
@@ -140,8 +131,11 @@ fn traceroute(hostname: String, hops: u32) {
                 },
                 Ok(hop_result) => {
                     if let Some(addr) = hop_result.addr {
-                        println!("{}: {} (dest: {})", ttl+1, addr, parts[0]);
-                        trace_complete = addr == parts[0];
+                        println!("{}: {}", ttl+1, addr);
+                        trace_complete = match ip_addr {
+                            None => false,
+                            Some(ref ip) => *ip == addr,
+                        };
                     } else {
                         println!("{}: no reply", ttl+1);
                     }
@@ -181,7 +175,7 @@ fn main() {
         .get_matches();
 
     let hostname: String = matches.value_of_t("hostname").unwrap();
-    let hops: u32 = matches.value_of_t("hops").unwrap_or(5);
+    let hops: u32 = matches.value_of_t("hops").unwrap_or(255);
     
     traceroute(hostname, hops);
 }
